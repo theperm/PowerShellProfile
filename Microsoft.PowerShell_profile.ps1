@@ -7,4 +7,4 @@
 #Import-Module "PowerTab" -ArgumentList "C:\Users\E20157\Documents\CodeOwlsLLC.StudioShell\PowerTabConfig.xml"
 ################ End of PowerTab Initialization Code ##########################
 
-. "C:\Users\E20157\Documents\WindowsPowerShell\DevMachineSetup\initProfile.ps1"
+#. "C:\Users\E20157\Documents\WindowsPowerShell\DevMachineSetup\initProfile.ps1"
