@@ -29,7 +29,7 @@ install-module Find-String
 
 if (!$NoPowertab)
 {
-  Import-Module "PowerTab" -ArgumentList "C:\Users\E20157\Documents\CodeOwlsLLC.StudioShell\PowerTabConfig.xml"
+  Import-Module "PowerTab" -ArgumentList ($HOME + "\Documents\WindowsPowerShell\Modules\PowerTab\PowerTabConfig.xml")
 }
 ################ End of PowerTab Initialization Code ##########################
 
