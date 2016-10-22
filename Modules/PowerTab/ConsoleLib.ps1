@@ -27,6 +27,7 @@ Function Out-ConsoleList {
 
     begin {
         [Object[]]$Content = @()
+        $NestedPowerTab = $true
     }
 
     process {
@@ -34,11 +35,17 @@ Function Out-ConsoleList {
     }
 
     end {
-        if (-not $ReturnWord) {$ReturnWord = $LastWord}
+        if (-not $PSBoundParameters.ContainsKey("ReturnWord")) {$ReturnWord = $LastWord}
 
         ## If contents contains less than minimum options, then forward contents without displaying console list
         if (($Content.Length -lt $PowerTabConfig.MinimumListItems) -and (-not $ForceList)) {
             $Content | Select-Object -ExpandProperty Value
+            return
+        }
+
+        ## If the shift key is pressed, then output the first result without displaying console list
+        if (Get-KeyState 0x10) {
+            $Content[0].Value
             return
         }
 
@@ -92,7 +99,7 @@ Function Out-ConsoleList {
                 }
                 $OldFilter = $Filter
             }
-            $Shift = $Key.ControlKeyState.ToString()
+            $ShiftPressed = Get-KeyState 0x10  ## Check for Shift Key
             $HasChild = $false
             switch ($Key.VirtualKeyCode) {
                 9 { ## Tab
@@ -103,7 +110,7 @@ Function Out-ConsoleList {
                         $Continue = $false
                         break
                     } else {
-                        if ($Shift -match 'ShiftPressed') {
+                        if ($ShiftPressed) {
                             Move-Selection -1  ## Up
                         } else {
                             Move-Selection 1  ## Down
@@ -112,7 +119,7 @@ Function Out-ConsoleList {
                     }
                 }
                 38 { ## Up Arrow
-                    if ($Shift -match 'ShiftPressed') {
+                    if ($ShiftPressed) {
                         ## Fast scroll selected
                         if ($PowerTabConfig.FastScrollItemCount -gt ($ListHandle.Items.Count - 1)) {
                             $Count = ($ListHandle.Items.Count - 1)
@@ -126,7 +133,7 @@ Function Out-ConsoleList {
                     break
                 }
                 40 { ## Down Arrow
-                    if ($Shift -match 'ShiftPressed') {
+                    if ($ShiftPressed) {
                         ## Fast scroll selected
                         if ($PowerTabConfig.FastScrollItemCount -gt ($ListHandle.Items.Count - 1)) {
                             $Count = ($ListHandle.Items.Count - 1)
@@ -165,7 +172,7 @@ Function Out-ConsoleList {
                     $New = $Items.Length
                     if ($New -lt 1) {
                         ## If new filter results in no items, sound error beep and remove character
-                        Write-Host "`a" -NoNewline
+                        [System.Console]::Beep()
                         $Filter = $Filter.SubString(0, $Filter.Length - 1)
                     } else {
                         if ($Old -ne $New) {
@@ -209,7 +216,7 @@ Function Out-ConsoleList {
                             $Key.VirtualKeyCode = 27
                             $Continue = $false
                         } else {
-                            Write-Host "`a" -NoNewline
+                            [System.Console]::Beep()
                         }
                     }
                     break
@@ -297,7 +304,7 @@ Function Out-ConsoleList {
                             return "$ReturnWord$Filter"
                         } else {
                             ## Sound error beep and remove character
-                            Write-Host "`a" -NoNewline
+                            [System.Console]::Beep()
                             $Filter = $Filter.SubString(0, $Filter.Length - 1)
                         }
                     } else {
@@ -470,8 +477,8 @@ Function Out-ConsoleList {
             'OldContent' = $OldBuffer
             'Location' = $BufferTop
         }
-        Add-Member -InputObject $Handle -MemberType 'ScriptMethod' -Name 'Clear' -Value {$Host.UI.RawUI.SetBufferContents($This.Location, $This.OldContent)}
-        Add-Member -InputObject $Handle -MemberType 'ScriptMethod' -Name 'Show' -Value {$Host.UI.RawUI.SetBufferContents($This.Location, $This.Content)}
+        Add-Member -InputObject $Handle -MemberType ScriptMethod -Name Clear -Value {$Host.UI.RawUI.SetBufferContents($This.Location, $This.OldContent)}
+        Add-Member -InputObject $Handle -MemberType ScriptMethod -Name Show -Value {$Host.UI.RawUI.SetBufferContents($This.Location, $This.Content)}
         $Handle
     }
 
@@ -573,7 +580,7 @@ Function Out-ConsoleList {
         $MinWidth = ([String]$Content.Count).Length * 4 + 7
         if ($Size.Width -lt $MinWidth) {$Size.Width = $MinWidth}
         $Content = foreach ($Item in $Content) {
-            $Item.DisplayText = " $($Item.Text) ".PadRight($Size.Width + 2)
+            $Item.DisplayText = "$($Item.Text) ".PadRight($Size.Width + 2)
             $Item
         }
         $ListConfig = Parse-List $Size
@@ -602,8 +609,8 @@ Function Out-ConsoleList {
             'LastItem' = ($Listconfig.ListHeight - 3)
             'MaxItems' = $Listconfig.MaxItems
         }
-        Add-Member -InputObject $Handle -MemberType 'ScriptMethod' -Name 'Clear' -Value {$This.Box.Clear()}
-        Add-Member -InputObject $Handle -MemberType 'ScriptMethod' -Name 'Show' -Value {$This.Box.Show(); $This.Content.Show()}
+        Add-Member -InputObject $Handle -MemberType ScriptMethod -Name Clear -Value {$This.Box.Clear()}
+        Add-Member -InputObject $Handle -MemberType ScriptMethod -Name Show -Value {$This.Box.Show(); $This.Content.Show()}
         $Handle
     }
 

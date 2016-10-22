@@ -8,14 +8,14 @@
 	ScriptsToProcess   = @()
 	ModuleToProcess    = @("PowerTab.psm1")
 	TypesToProcess     = @()
-	FormatsToProcess   = @()
+	FormatsToProcess   = @("TabExpansion.Format.ps1xml")
 	ModuleList         = @("PowerTab.psm1")
 	FileList           = @()
 
 	## Public Interface
 	CmdletsToExport    = ''
 	FunctionsToExport  = @('*-*')
-	VariablesToExport  = @('PowerTabConfig','PowerTabError')
+	VariablesToExport  = @('PowerTabConfig','PowerTabLog')
 	AliasesToExport    = '*'
 
 	## Requirements

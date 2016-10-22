@@ -1,0 +1,5 @@
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Shares\bin\Release\Shares.dll
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Shares\bin\Release\Shares.pdb
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Shares\obj\Release\Shares.csprojResolveAssemblyReference.cache
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Shares\obj\Release\Shares.dll
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Shares\obj\Release\Shares.pdb

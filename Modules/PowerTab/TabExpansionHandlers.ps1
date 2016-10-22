@@ -29,7 +29,7 @@ showing up from Get-Command.
     Register-TabExpansion "Get-Alias" $AliasHandler -Type "Command"
 }
 
-## Get-Command (-Module mainly)
+## Get-Command
 Register-TabExpansion "Get-Command" -Type "Command" {
     param($Context, [ref]$TabExpansionHasOutput)
     $Argument = $Context.Argument
@@ -51,12 +51,16 @@ Register-TabExpansion "Get-Command" -Type "Command" {
                 $Parameters["CommandType"] = Resolve-TabExpansionParameterValue $Context.OtherParameters["CommandType"]
             } else {
                 $Parameters["CommandType"] = "Alias","Function","Filter","Cmdlet"
+                if ($PSVersionTable.PSVersion -ge "3.0") {
+                    $Parameters["CommandType"] += "Workflow"
+                }
             }
             Get-Command "$Argument*" @Parameters | Select-Object -ExpandProperty Name
         }
         'Noun' {
-            ## TODO
-            ## TODO: [workitem:9]
+            $TabExpansionHasOutput.Value = $true
+            Get-Command -CommandType Cmdlet,Filter,Function | Where-Object {$_.Name -match "^[^-]+-(?<Noun>$Argument.*)"} |
+                ForEach-Object {$Matches.Noun} | Sort-Object -Unique
         }
         'Verb' {
             $TabExpansionHasOutput.Value = $true
@@ -71,7 +75,7 @@ Register-TabExpansion "Reset-ComputerMachinePassword" -Type "Command" {
     $Argument = $Context.Argument
     switch -exact ($Context.Parameter) {
         'Server' {
-            if ($Argument -match "^\w") {
+            if ($Argument -notmatch '^\$') {
                 $TabExpansionHasOutput.Value = $true
                 Get-TabExpansion "$Argument*" Computer | Select-Object -ExpandProperty "Text"
             }
@@ -99,10 +103,13 @@ Register-TabExpansion "Reset-ComputerMachinePassword" -Type "Command" {
             'RestorePoint' {
                 $TabExpansionHasOutput.Value = $true
                 $QuoteSpaces.Value = $false
-                ## TODO: Display more info
-                ## TODO: [workitem:10]
-                foreach ($Point in Get-ComputerRestorePoint -EA Stop) {
-                    $Text = "{0}: {1}" -f ([String]$Point.SequenceNumber),[DateTime]::ParseExact($Point.CreationTime, "yyyyMMddHHmmss.ffffff-000", $null)
+                foreach ($Point in Get-ComputerRestorePoint -ErrorAction Stop) {
+                    if ($Point.Description.Length -gt 50) {
+                        $Description = $Point.Description.SubString(0, 50)
+                    } else {
+                        $Description = $Point.Description
+                    }
+                    $Text = "{0}: {1} ({2})" -f $Point.SequenceNumber,[DateTime]::ParseExact($Point.CreationTime, "yyyyMMddHHmmss.ffffff-000", $null),$Description
                     New-TabItem -Value $Point.SequenceNumber -Text $Text -Type ComputerRestorePoint
                 }
             }
@@ -194,13 +201,12 @@ Register-TabExpansion "Reset-ComputerMachinePassword" -Type "Command" {
                 $Namespaces | Where-Object {$_ -like "$Argument*"} | Sort-Object
             }
             'SourceIdentifier' {
-                ## TODO:
-                ## TODO: [workitem:11]
+                $TabExpansionHasOutput.Value = $true
+                Get-Event "$Argument*" | Select-Object -ExpandProperty SourceIdentifier | Sort-Object
             }
         }
     }.GetNewClosure()
-    
-    ## TODO: Needs work
+
     Register-TabExpansion "Get-Event" $GetEventHandler -Type "Command"
     Register-TabExpansion "Get-EventSubscriber" $EventHandler -Type "Command"
     Register-TabExpansion "New-Event" $EventHandler -Type "Command"
@@ -253,6 +259,33 @@ Register-TabExpansion "Reset-ComputerMachinePassword" -Type "Command" {
     Register-TabExpansion "Write-EventLog" $EventLogHandler -Type "Command"
 }
 
+## Get-FormatData
+Register-TabExpansion "Get-FormatData" -Type "Command" {
+    param($Context, [ref]$TabExpansionHasOutput)
+    $Argument = $Context.Argument
+    switch -exact ($Context.Parameter) {
+        'TypeName' {
+            if ($Argument -notmatch '^\.') {
+                ## TODO: Find way to differentiate namespaces from types
+                $TabExpansionHasOutput.Value = $true
+                $Dots = $Argument.Split(".").Count - 1
+                $res = @()
+                $res += $dsTabExpansionDatabase.Tables['Types'].Select("NS like '$Argument*' and DC = $($Dots + 1)") |
+                    Select-Object -Unique -ExpandProperty NS | New-TabItem -Value {$_} -Text {"$_."} -Type Namespace
+                $res += $dsTabExpansionDatabase.Tables['Types'].Select("NS like 'System.$Argument*' and DC = $($Dots + 2)") |
+                    Select-Object -Unique -ExpandProperty NS | New-TabItem -Value {$_} -Text {"$_."} -Type Namespace
+                if ($Dots -gt 0) {
+                    $res += $dsTabExpansionDatabase.Tables['Types'].Select("Name like '$Argument*' and DC = $Dots") |
+                        Select-Object -ExpandProperty Name | New-TabItem -Value {$_} -Text {$_} -Type Type
+                    $res += $dsTabExpansionDatabase.Tables['Types'].Select("Name like 'System.$Argument*' and DC = $($Dots + 1)") |
+                        Select-Object -ExpandProperty Name | New-TabItem -Value {$_} -Text {$_} -Type Type
+                }
+                $res | Where-Object {$_}
+            }
+        }
+    }
+}
+
 ## Get-Help
 & {
     $HelpHandler = {
@@ -267,16 +300,36 @@ Register-TabExpansion "Reset-ComputerMachinePassword" -Type "Command" {
                         $Commands
                     }
                 } else {
-                    $Commands = Get-Command "$Argument*" -CommandType Function,Filter,Cmdlet,ExternalScript | Select-Object -ExpandProperty Name
+                    $CommandTypes = "Function","ExternalScript","Filter","Cmdlet","Alias"
+                    if ($PSVersionTable.PSVersion -ge "3.0") {
+                        $CommandTypes += "Workflow"
+                    }
+                    $Commands = Get-Command "$Argument*" -CommandType $CommandTypes | Select-Object -ExpandProperty Name
                     if ($Commands) {
                         $TabExpansionHasOutput.Value = $true
                         $Commands
                     }
                 }
             }
+            'Parameter' {
+                $TabExpansionHasOutput.Value = $true
+                if ($Context.OtherParameters["Name"]) {
+                    $Command = Resolve-TabExpansionParameterValue $Context.OtherParameters["Name"]
+                } else {
+                    $Command = Resolve-TabExpansionParameterValue $Context.PositionalParameters[0]
+                }
+                $CommandInfo = try {& (Get-Module PowerTab) Resolve-Command $Command -CommandInfo -ErrorAction "Stop"} catch {}
+                if ($CommandInfo) {
+                    foreach ($Parameter in $CommandInfo.Parameters.Values) {
+                        if ($Parameter.Name -like "$Argument*") {
+                            New-TabItem -Value $Parameter.Name -Text $Parameter.Name -Type Parameter
+                        }
+                    }
+                }
+            }
         }
     }.GetNewClosure()
-    
+
     Register-TabExpansion "Get-Help" $HelpHandler -Type "Command"
     Register-TabExpansion "help" $HelpHandler -Type "Command"
 }
@@ -296,6 +349,21 @@ Register-TabExpansion "Get-HotFix" -Type "Command" {
         }
     }
 }.GetNewClosure()
+
+## ConvertTo-HTML
+Register-TabExpansion "ConvertTo-HTML" -Type "Command" {
+    param($Context, [ref]$TabExpansionHasOutput, [ref]$QuoteSpaces)
+    $Argument = $Context.Argument
+    switch -exact ($Context.Parameter) {
+        'Property' {
+            if ($Argument -like "@*") {
+                $TabExpansionHasOutput.Value = $true
+                $QuoteSpaces.Value = $false
+                '@{Label=""; Expression={$_.}}'
+            }
+        }
+    }
+}
 
 ## ItemProperty
 & {
@@ -341,8 +409,8 @@ Register-TabExpansion "Get-HotFix" -Type "Command" {
                 Get-Job | Select-Object -ExpandProperty InstanceId
             }
             'Location' {
-                ## TODO: Receive-Job
-                ## TODO: [workitem:12]
+                $TabExpansionHasOutput.Value = $true
+                Get-TabExpansion "$Argument*" Computer | New-TabItem -Value {$_.Text} -Text {$_.Text} -Type Computer
             }
             'Name' {
                 $TabExpansionHasOutput.Value = $true
@@ -411,7 +479,7 @@ Register-TabExpansion "Remove-Module" -Type "Command" {
     switch -exact ($Context.Parameter) {
         'Name' {
             $TabExpansionHasOutput.Value = $true
-            Get-Module "$Argument*" | Select-Object -ExpandProperty Name | Sort-Object |
+            Get-Module "$Argument*" | Sort-Object Name |
                 New-TabItem -Value {$_.Name} -Text {$_.Name} -Type Module
         }
     }
@@ -426,7 +494,7 @@ Register-TabExpansion "Group-Object" -Type "Command" {
             if ($Argument -like "@*") {
                 $TabExpansionHasOutput.Value = $true
                 $QuoteSpaces.Value = $false
-                '@{Name=""; Expression={$_.}}'
+                '@{Expression={$_.}}'
             }
         }
     }
@@ -434,9 +502,34 @@ Register-TabExpansion "Group-Object" -Type "Command" {
 
 ## New-Object
 Register-TabExpansion "New-Object" -Type "Command" {
-    param($Context, [ref]$TabExpansionHasOutput)
+    param($Context, [ref]$TabExpansionHasOutput, [ref]$QuoteSpaces)
     $Argument = $Context.Argument
     switch -exact ($Context.Parameter) {
+        'ArgumentList' {
+            $TabExpansionHasOutput.Value = $true
+            $QuoteSpaces.Value = $false
+
+            if ($Context.OtherParameters["TypeName"]) {
+                $TypeName = Resolve-TabExpansionParameterValue $Context.OtherParameters["TypeName"]
+            } elseif ($Context.PositionalParameter -ge 0) {
+                $TypeName = Resolve-TabExpansionParameterValue $Context.PositionalParameters[0]
+            } else {
+                ## TODO: Localize
+                throw "No TypeName specified."
+            }
+
+            Invoke-Expression "[$TypeName].GetConstructors()" | ForEach-Object {
+                $Parameters = foreach ($Parameter in $_.GetParameters()) {
+                    '[{0}] ${1}' -f ($Parameter.ParameterType -replace '^System\.'), $Parameter.Name
+                }
+                if ($Parameters) {
+                    $Param = "({0})" -f [String]::Join(', ',$Parameters)
+                    New-TabItem -Value $Param -Text $Param -Type Constructor
+                } else {
+                    New-TabItem -Value "()" -Text "() <Empty Constructor>" -Type Constructor
+                }
+            }
+        }
         'ComObject' {
             ## TODO: Maybe cache these like we do with .NET types and WMI object names?
             ## TODO: [workitem:13]
@@ -520,10 +613,10 @@ Register-TabExpansion "Out-Printer" -Type "Command" {
                 $QuoteSpaces.Value = $false
                 if ($Argument -match '^[0-9]+$') {
                     Get-Process | Where-Object {$_.Id.ToString() -like "$Argument*"} |
-                        New-TabItem -Value {$_.Id} -Text {"{0:-4} {1}" -f ([String]$_.Id),$_.Name} -Type Process
+                        New-TabItem -Value {$_.Id} -Text {"{0,-4} {1}" -f ([String]$_.Id),$_.Name} -Type Process
                 } else {
                     Get-Process | Where-Object {$_.Name -like "$Argument*"} |
-                        New-TabItem -Value {$_.Id} -Text {"{0:-4} {1}" -f ([String]$_.Id),$_.Name} -Type Process
+                        New-TabItem -Value {$_.Id} -Text {"{0,-4} {1}" -f ([String]$_.Id),$_.Name} -Type Process
                 }
             }
             'Name' {
@@ -546,10 +639,10 @@ Register-TabExpansion "Out-Printer" -Type "Command" {
                 }
                 if ($Argument -match '^[0-9]+$') {
                     Get-Process @Parameters | Where-Object {$_.Id.ToString() -like "$Argument*"} |
-                        New-TabItem -Value {$_.Id} -Text {"{0:-4} <# {1} #>" -f ([String]$_.Id),$_.Name} -Type Process
+                        New-TabItem -Value {$_.Id} -Text {"{0,-4} <# {1} #>" -f ([String]$_.Id),$_.Name} -Type Process
                 } else {
                     Get-Process @Parameters | Where-Object {$_.Name -like "$Argument*"} |
-                        New-TabItem -Value {$_.Id} -Text {"{0:-4} <# {1} #>" -f ([String]$_.Id),$_.Name} -Type Process
+                        New-TabItem -Value {$_.Id} -Text {"{0,-4} <# {1} #>" -f ([String]$_.Id),$_.Name} -Type Process
                 }
             }
             'Name' {
@@ -562,7 +655,7 @@ Register-TabExpansion "Out-Printer" -Type "Command" {
             }
         }
     }.GetNewClosure()
-    
+
     Register-TabExpansion "Debug-Process" $ProcessHandler -Type "Command"
     Register-TabExpansion "Get-Process" $GetProcessHandler -Type "Command"
     Register-TabExpansion "Stop-Process" $ProcessHandler -Type "Command"
@@ -572,24 +665,81 @@ Register-TabExpansion "Out-Printer" -Type "Command" {
 ## PSBreakpoint
 & {
     $PSBreakpointHandler = {
-        param($Context, [ref]$TabExpansionHasOutput)
+        param($Context, [ref]$TabExpansionHasOutput, [ref]$QuoteSpaces)
         $Argument = $Context.Argument
         switch -exact ($Context.Parameter) {
             'Breakpoint' {
-                ## TODO:
-                ## TODO: [workitem:15]
+                ## TODO:  More info in display text
+                $TabExpansionHasOutput.Value = $true
+                $QuoteSpaces.Value = $false
+                $DisplayText = {
+                    $Text = "{0,-2} " -f $_.Id
+                    if ($_.Command) {
+                        $Text += $_.Command
+                        if ($_.Script) {
+                            $Text += " ({0})" -f $_.Script
+                        }
+                    } elseif ($_.Variable) {
+                        $Text += '$' + $_.Variable
+                        if ($_.Script) {
+                            $Text += " ({0})" -f $_.Script
+                        }
+                    } elseif ($_.Line) {
+                        if ($_.Script.Length -ge 60) {
+                            $Script = $_.Script.SubString(0, 60)
+                        } else {
+                            $Script = $_.Script
+                        }
+                        $Text += "{0}:{1}" -f $Script,$_.Line
+                    }
+                    $Text
+                }
+                Get-PSBreakpoint | Sort-Object Id | New-TabItem -Value {"(Get-PSBreakPoint -Id {0})" -f $_.Id} -Text $DisplayText -Type BreakPoint
             }
             'Command' {
-                ## TODO:
-                ## TODO: [workitem:15]
+                $TabExpansionHasOutput.Value = $true
+                ## TODO:  Filter command list based on what is used in a script?!
+                ## TODO:  Set object types
+                $CommandTypes = "Function","ExternalScript","Filter","Cmdlet"
+                if ($PSVersionTable.PSVersion -ge "3.0") {
+                    $CommandTypes += "Workflow"
+                }
+                Get-Command "$Argument*" -CommandType $CommandTypes | New-TabItem -Value {$_.Name} -Text {$_.Name}
             }
             'Id' {
-                ## TODO:
-                Get-PSBreakpoint | Select-Object -ExpandProperty Id
+                ## TODO:  More info in display text
+                $TabExpansionHasOutput.Value = $true
+                $DisplayText = {
+                    $Text = "{0,-2} " -f $_.Id
+                    if ($_.Command) {
+                        $Text += $_.Command
+                        if ($_.Script) {
+                            $Text += " ({0})" -f $_.Script
+                        }
+                    } elseif ($_.Variable) {
+                        $Text += '$' + $_.Variable
+                        if ($_.Script) {
+                            $Text += " ({0})" -f $_.Script
+                        }
+                    } elseif ($_.Line) {
+                        if ($_.Script.Length -ge 60) {
+                            $Script = $_.Script.SubString(0, 60)
+                        } else {
+                            $Script = $_.Script
+                        }
+                        $Text += "{0}:{1}" -f $Script,$_.Line
+                    }
+                    $Text
+                }
+                Get-PSBreakpoint | Sort-Object Id | New-TabItem -Value {$_.Id} -Text $DisplayText -Type BreakPoint
             }
             'Line' {
-                ## TODO:
-                ## TODO: [workitem:15]
+                ## TODO:  Show line contents?
+                $TabExpansionHasOutput.Value = $true
+                if ($Context.OtherParameters["Script"]) {
+                    1..(Get-Content (Resolve-TabExpansionParameterValue $Context.OtherParameters["Script"])).Count |
+                        New-TabItem -Value {$_} -Text {$_}
+                }
             }
             'Script' {
                 ## TODO: Display relative paths
@@ -608,10 +758,11 @@ Register-TabExpansion "Out-Printer" -Type "Command" {
         }
     }.GetNewClosure()
     
-    Register-TabExpansion "Disable-PSBreakpoint" $PSBreakpointHandler -Type "Command"
-    Register-TabExpansion "Enable-PSBreakpoint" $PSBreakpointHandler -Type "Command"
-    Register-TabExpansion "Get-PSBreakpoint" $PSBreakpointHandler -Type "Command"
-    Register-TabExpansion "Set-PSBreakpoint" $PSBreakpointHandler -Type "Command"
+    Register-TabExpansion "Disable-PSBreakpoint" $PSBreakpointHandler -Type Command
+    Register-TabExpansion "Enable-PSBreakpoint" $PSBreakpointHandler -Type Command
+    Register-TabExpansion "Get-PSBreakpoint" $PSBreakpointHandler -Type Command
+    Register-TabExpansion "Set-PSBreakpoint" $PSBreakpointHandler -Type Command
+    Register-TabExpansion "Remove-PSBreakpoint" $PSBreakpointHandler -Type Command
 }
 
 ## PSDrive
@@ -957,8 +1108,17 @@ Register-TabExpansion "Get-WinEvent" -Type "Command" {
                         New-TabItem -Value {$_.LCID} -Text {$_.Name} -Type Locale
             }
             'Name' {
-                ## TODO: ??? (Method Name)
-                ## TODO: [workitem:17]
+                $TabExpansionHasOutput.Value = $true
+                if ($Context.OtherParameters["Class"]) {
+                    $Class = [WmiClass](Resolve-TabExpansionParameterValue $Context.OtherParameters["Class"])
+                } elseif ($Context.OtherParameters["Path"]) {
+                    $Class = [WmiClass]((Resolve-TabExpansionParameterValue $Context.OtherParameters["Path"]) -replace '\.\w.+')
+                } elseif ($Context.PositionalParameters[0]) {
+                    $Class = [WmiClass](Resolve-TabExpansionParameterValue $Context.PositionalParameters[0])
+                }
+                if ($Class) {
+                    $Class.Methods | Where-Object {$_.Name -like "$Argument*"} | New-TabItem -Value {$_.Name} -Text {$_.Name} -Type Method
+                }
             }
             'Namespace' {
                 $TabExpansionHasOutput.Value = $true
@@ -978,11 +1138,17 @@ Register-TabExpansion "Get-WinEvent" -Type "Command" {
             }
             'Path' {
                 ## TODO: ???
-                ## TODO: [workitem:17]
             }
             'Property' {
-                ## TODO: ???
-                ## TODO: [workitem:17]
+                $TabExpansionHasOutput.Value = $true
+                if ($Context.OtherParameters["Class"]) {
+                    $Class = [WmiClass](Resolve-TabExpansionParameterValue $Context.OtherParameters["Class"])
+                } elseif ($Context.PositionalParameters[0]) {
+                    $Class = [WmiClass](Resolve-TabExpansionParameterValue $Context.PositionalParameters[0])
+                }
+                if ($Class) {
+                    $Class.Properties | Where-Object {$_.Name -like "$Argument*"} | New-TabItem -Value {$_.Name} -Text {$_.Name} -Type Property
+                }
             }
         }
     }.GetNewClosure()

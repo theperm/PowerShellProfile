@@ -1,0 +1,6 @@
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Lerch.PowerShell\bin\Release\Lerch.PowerShell.dll
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Lerch.PowerShell\bin\Release\Lerch.PowerShell.pdb
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Lerch.PowerShell\obj\Release\Lerch.PowerShell.Intellisense.resources
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Lerch.PowerShell\obj\Release\Lerch.PowerShell.csproj.GenerateResource.Cache
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Lerch.PowerShell\obj\Release\Lerch.PowerShell.dll
+C:\Users\e20157\Documents\WindowsPowerShell\Modules\powertab\Lib\Lerch.PowerShell\obj\Release\Lerch.PowerShell.pdb

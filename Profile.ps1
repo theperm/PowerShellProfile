@@ -12,15 +12,16 @@ $desktop =  $(resolve-path "$Env:userprofile\desktop")
 if($ProfilePath)
 {
   $env:path += ";$ProfileRoot;$scripts"
-  $env:Path += ";C:\Program Files\7-Zip"
-  $env:Path += ";C:\Program Files (x86)\SysInternals Suite\"
+  $env:Path += ";${env:ProgramFiles}\7-Zip"
+  $env:Path += ";${env:ProgramFiles(x86)}\SysInternals Suite\"
 }
 
 import-module PsGet
+install-module go
 install-module PsUrl
 #install-module Posh-Git
 #install-module Posh-GitDir
-install-module Find-String
+#install-module Find-String
 
 <############### Start of PowerTab Initialization Code ########################
     Added to profile by PowerTab setup for loading of custom tab expansion.
@@ -33,7 +34,10 @@ if (!$NoPowertab)
 }
 ################ End of PowerTab Initialization Code ##########################
 
-
+if($ProfilePath)
+{
+  #$env:path += ";${env:ProgramFiles(x86)}\Git\bin"
+}
 # Posh-Hg and Posh-git prompt
 . $ProfileRoot\Modules\posh-svn\profile.example.ps1
 . $ProfileRoot\Modules\posh-hg\profile.example.ps1
@@ -47,9 +51,9 @@ $global:HgPromptSettings.BeforeText = '[hg:'
 $global:SvnPromptSettings.BeforeText = '[svn:'
 
 # http://jamesone111.wordpress.com/2012/01/28/adding-persistent-history-to-powershell/
-$MaximumHistoryCount = 2048
+$MaximumHistoryCount = 4096
 $Global:logfile = "$env:USERPROFILE\Documents\windowsPowershell\history.csv" 
-$truncateLogLines = 1000
+$truncateLogLines = 5000
 $History = @()
 $History += '#TYPE Microsoft.PowerShell.Commands.HistoryInfo'
 $History += '"Id","CommandLine","ExecutionStatus","StartExecutionTime","EndExecutionTime"'
@@ -110,9 +114,9 @@ New-Alias -Name i -Value Invoke-History -Description "Invoke history alias" -For
 
 Rename-Item Alias:\h original_h -Force
 
-function h($count = 20) { Get-History -c  $count }
-
-function hf($arg) { Get-History -c $MaximumHistoryCount | out-string -stream | select-string $arg }
+function h($count = 50) { Get-History -c  $count}
+function hu($count = 50) { Get-History -c  $count | select -Unique}
+function hf($arg, $count = 10) { Get-History -c $MaximumHistoryCount | out-string -stream | select-string $arg | select -Unique -last $count }
 
 . $ProfileRoot\Scripts\MiscFunctions.ps1
 
@@ -126,11 +130,15 @@ function gpsm ($count = 20){ gps | sort pm -Descending | select -f $count }
 
 set-alias -Name z7 -Value 'C:\Program Files\7-Zip\7z.exe'
 
-function ipmoliquid { Import-Module C:\workspace\source\PowerShell\Elysian.psd1 -Force }
 
 function gitk { sh -c gitk }
 set-alias gitx -value "C:\Program Files (x86)\GitExtensions\GitExtensions.exe"
 set-alias -Name got -Value git -Description "Git alias" -Force
 set-alias -Name get -Value git -Description "Git alias" -Force
+set-alias -Name git -Value "C:\Program Files\Git\cmd\git.exe" -Description "Git alias" -Force
 
 function find-replace ($file, $find, $replace) { ls $file -rec | %{ $f=$_; (gc $f.PSPath) | %{ $_ -replace $find, $replace } | sc $f.PSPath } }
+
+function ipmoliquid { Import-Module LiquidHelpers -Force }
+
+#ipmoliquid

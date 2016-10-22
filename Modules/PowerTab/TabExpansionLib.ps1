@@ -66,7 +66,7 @@ Function Invoke-TabItemSelector {
         [String]
         $LastWord
         ,
-        [ValidateSet("ConsoleList","Intellisense","Dynamic","Default","ObjectDefault")]
+        [ValidateSet("ConsoleList","Intellisense","CommonPrefix","Dynamic","Default","ObjectDefault")]
         [String]
         $SelectionHandler = "Default"
         ,
@@ -86,6 +86,11 @@ Function Invoke-TabItemSelector {
     )
 
     begin {
+        Write-Trace "Invoking Tab Item Selector."
+        $SelectionReason = "it is the user's choice"
+
+        if (-not $PSBoundParameters.ContainsKey("ReturnWord")) {$ReturnWord = $LastWord}
+
         [String[]]$Values = @()
         [Object[]]$Objects = @()
     }
@@ -106,8 +111,16 @@ Function Invoke-TabItemSelector {
     end {
         Write-Debug "Invoke-TabItemSelector parameter set: $($PSCmdlet.ParameterSetName)"
 
+        if (($Objects.Count -eq 0) -and ($Values.Count -eq 0)) {
+            if ($ReturnWord) {
+                $ReturnWord
+            }
+            return
+        }
+
         ## If dynamic, select an appropriate handler based on the current host
         if ($SelectionHandler -eq "Dynamic") {
+            $SelectionReason = "it is the perferred handler for the current host"
             switch -exact ($Host.Name) {
                 'ConsoleHost' {  ## PowerShell.exe
                     $SelectionHandler = "ConsoleList"
@@ -161,11 +174,13 @@ Function Invoke-TabItemSelector {
                 break
             }
         }
-        if ($IncompatibleHandlers -contains $SelectionHandler) {$SelectionHandler = "Default"}
+        if ($IncompatibleHandlers -contains $SelectionHandler) {
+            $SelectionReason = "the chosen handler is not compatible with the current host"
+            $SelectionHandler = "Default"
+        }
 
         ## List of selection handlers that can handle objects
-        ## TODO: Upgrade ConsoleList
-        $ObjectHandlers = @("ConsoleList","ObjectDefault")
+        $ObjectHandlers = @("ConsoleList","CommonPrefix","ObjectDefault")
 
         if (($ObjectHandlers -contains $SelectionHandler) -and ($PSCmdlet.ParameterSetName -eq "Values")) {
             $Objects = foreach ($Item in $Values) {New-TabItem -Value $Item -Text $Item -Type Unknown}
@@ -173,9 +188,12 @@ Function Invoke-TabItemSelector {
             $Values = foreach ($Item in $Objects) {$Item.Value}
         }
 
+        Write-Trace "Decided to invoke $SelectionHandler, because $SelectionReason."
+
         switch -exact ($SelectionHandler) {
             'ConsoleList' {$Objects | Out-ConsoleList $LastWord $ReturnWord -ForceList:$ForceList}
             'Intellisense' {$Values | Invoke-Intellisense $LastWord}
+            'CommonPrefix' {$Objects | Show-CommonPrefix $LastWord}
             'ObjectDefault' {$Objects}
             'Default' {$Values}
         }
@@ -434,7 +452,7 @@ Function Import-TabExpansionTheme {
     )
 
     end {
-		if ($PSCmdlet.ParameterSetName -eq "Name") {
+        if ($PSCmdlet.ParameterSetName -eq "Name") {
             Import-Csv (Join-Path $PSScriptRoot "ColorThemes\Theme${Name}.csv") | ForEach-Object {$PowerTabConfig.Colors."$($_.Name)" = $_.Color}
         } else {
             Import-Csv $LiteralPath | ForEach-Object {$PowerTabConfig.Colors."$($_.Name)" = $_.Color}
@@ -460,7 +478,7 @@ Function Export-TabExpansionTheme {
     )
 
     process {
-		if ($PSCmdlet.ParameterSetName -eq "Name") {
+        if ($PSCmdlet.ParameterSetName -eq "Name") {
             $ExportPath = Join-Path $PSScriptRoot "ColorThemes\Theme${Name}.csv"
         } else {
             $ExportPath = $LiteralPath
@@ -480,9 +498,9 @@ Function Export-TabExpansionTheme {
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Update-TabExpansionDataBase {
-	[CmdletBinding(SupportsShouldProcess = $true, SupportsTransactions = $false,
-		ConfirmImpact = "Low", DefaultParameterSetName = "")]
-	param(
+    [CmdletBinding(SupportsShouldProcess = $true, SupportsTransactions = $false,
+        ConfirmImpact = "Low", DefaultParameterSetName = "")]
+    param(
         [Switch]
         $Force
     )
@@ -512,7 +530,7 @@ Set-Alias udte Update-TabExpansionDataBase
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Update-TabExpansionType {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param()
 
     end {
@@ -557,9 +575,9 @@ Function Update-TabExpansionType {
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Add-TabExpansionType {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param(
-		[Parameter(Position = 0, Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Position = 0, Mandatory = $true, ValueFromPipeline = $true)]
         [ValidateNotNull()]
         [System.Reflection.Assembly]
         $Assembly
@@ -607,9 +625,37 @@ Function Add-TabExpansionType {
 }
 
 
+Function Find-TabExpansionType {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0, ValueFromPipeline = $true)]
+        [String]
+        $Name
+    )
+
+    process {
+        ## TODO: Find way to differentiate namespaces from types
+        $Dots = $Name.Split(".").Count - 1
+        $res = @()
+
+        $res += $dsTabExpansionDatabase.Tables['Types'].Select("NS like '$Name*' and DC = $($Dots + 1)") |
+            Select-Object -Unique -ExpandProperty NS | New-TabItem -Value {$_} -Text {"$_."} -Type Namespace
+        $res += $dsTabExpansionDatabase.Tables['Types'].Select("NS like 'System.$Name*' and DC = $($Dots + 2)") |
+            Select-Object -Unique -ExpandProperty NS | New-TabItem -Value {$_} -Text {"$_."} -Type Namespace
+        if ($Dots -gt 0) {
+            $res += $dsTabExpansionDatabase.Tables['Types'].Select("Name like '$Name*' and DC = $Dots") |
+                Select-Object -ExpandProperty Name | New-TabItem -Value {$_} -Text {$_} -Type Type
+            $res += $dsTabExpansionDatabase.Tables['Types'].Select("Name like 'System.$Name*' and DC = $($Dots + 1)") |
+                Select-Object -ExpandProperty Name | New-TabItem -Value {$_} -Text {$_} -Type Type
+        }
+        $res | Where-Object {$_}
+    }
+}
+
+
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Update-TabExpansionWmi {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param()
 
     end {
@@ -623,8 +669,8 @@ Function Update-TabExpansionWmi {
         $i = 0 ; Write-Progress $Resources.update_tabexpansiondatabase_wmi_activity $i
         foreach ($Class in (([WmiClass]'').PSBase.GetSubclasses($Options))) {
             $i++ ; if ($i % 10 -eq 0) {Write-Progress $Resources.update_tabexpansiondatabase_wmi_activity $i}
-            $Description = try { $Class.GetQualifierValue('Description') } catch { }
-            [Void]$dsTabExpansionDatabase.Tables['WMI'].Rows.Add($Class.Name, $Description )
+            $Description = try { $Class.GetQualifierValue('Description') } catch {""}
+            [Void]$dsTabExpansionDatabase.Tables['WMI'].Rows.Add($Class.Name, $Description)
         }
         Write-Progress $Resources.update_tabexpansiondatabase_wmi_activity $i -Completed
     }
@@ -633,14 +679,15 @@ Function Update-TabExpansionWmi {
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Update-TabExpansionCom {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param()
 
     end {
         $dsTabExpansionDatabase.Tables['COM'].Clear()
 
         $i = 0 ; Write-Progress $Resources.update_tabexpansiondatabase_com_activity $i
-        foreach ($Class in (Get-WmiObject Win32_ClassicCOMClassSetting -Filter "VersionIndependentProgId LIKE '%'" | Sort-Object VersionIndependentProgId)) {
+        foreach ($Class in (Get-WmiObject Win32_ClassicCOMClassSetting -Filter "VersionIndependentProgId LIKE '%'" |
+                Sort-Object VersionIndependentProgId)) {
             $i++ ; if ($i % 10 -eq 0) {Write-Progress $Resources.update_tabexpansiondatabase_com_activity $i}
             [Void]$dsTabExpansionDatabase.Tables['COM'].Rows.Add($Class.VersionIndependentProgId, $Class.Description)
         }
@@ -651,21 +698,21 @@ Function Update-TabExpansionCom {
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Add-TabExpansionComputer {
-	[CmdletBinding(SupportsShouldProcess = $false, SupportsTransactions = $false,
-		ConfirmImpact = "None", DefaultParameterSetName = "Name")]
-	param(
+    [CmdletBinding(SupportsShouldProcess = $false, SupportsTransactions = $false,
+        ConfirmImpact = "None", DefaultParameterSetName = "Name")]
+    param(
         [Alias("Name")]
-		[Parameter(ParameterSetName = "Name", Position = 0, Mandatory = $true, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]
+        [Parameter(ParameterSetName = "Name", Position = 0, Mandatory = $true, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]
         [ValidateNotNullOrEmpty()]
         [String]
         $ComputerName
         ,
-		[Parameter(ParameterSetName = "OU", Position = 0, Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(ParameterSetName = "OU", Position = 0, Mandatory = $true, ValueFromPipeline = $true)]
         [ValidateNotNull()]
         [System.DirectoryServices.DirectoryEntry]
         $OU
         ,
-		[Parameter(ParameterSetName = "NetView")]
+        [Parameter(ParameterSetName = "NetView")]
         [Switch]
         $NetView
     )
@@ -705,7 +752,7 @@ Function Add-TabExpansionComputer {
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Remove-TabExpansionComputer {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param()
 
     end {
@@ -719,7 +766,7 @@ Function Remove-TabExpansionComputer {
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Get-TabExpansion {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param(
         [Parameter(Position = 0)]
         [String]
@@ -748,20 +795,34 @@ Function Get-TabExpansion {
         }
 
         ## Run query
-        if ("COM","Types","WMI" -contains $Type){
+        if ("COM","Types","WMI" -contains $Type) {
             ## Construct query from multiple filters
             $Query = "Name LIKE '$($Filters[0])'"
             foreach ($Filter in $Filters[1..($Filters.Count - 1)]) {
                 $Query += " AND Name LIKE '$Filter'"
             }
-            $dsTabExpansionDatabase.Tables[$Type].Select($Query)
+            switch -exact ($Type) {
+                "COM" {
+                    $dsTabExpansionDatabase.Tables[$Type].Select($Query) |
+                        Select-Object Name,Description | RetypeObject "PowerTab.TabExpansion.COMItem"
+                }
+                "Types" {
+                    $dsTabExpansionDatabase.Tables[$Type].Select($Query) |
+                        Select-Object Name,DC,NS | RetypeObject "PowerTab.TabExpansion.TypeItem"
+                }
+                "WMI" {
+                    $dsTabExpansionDatabase.Tables[$Type].Select($Query) |
+                        Select-Object Name,Description | RetypeObject "PowerTab.TabExpansion.WMIItem"
+                }
+            }
         } else {
             ## Construct query from multiple filters
             $Query = "Filter LIKE '$($Filters[0])'"
             foreach ($Filter in $Filters[1..($Filters.Count - 1)]) {
                 $Query += " AND Filter LIKE '$Filter'"
             }
-            $dsTabExpansionDatabase.Tables["Custom"].Select("$Query AND Type LIKE '$Type'")
+            $dsTabExpansionDatabase.Tables["Custom"].Select("$Query AND Type LIKE '$Type'") |
+                Select-Object Filter,Text,Type | RetypeObject "PowerTab.TabExpansion.Item"
         }
 
         trap [System.Management.Automation.PipelineStoppedException] {
@@ -775,7 +836,7 @@ Set-Alias gte Get-TabExpansion
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Add-TabExpansion {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param(
         [Parameter(Position = 0, Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
@@ -795,6 +856,15 @@ Function Add-TabExpansion {
 
     ## TODO: Add -PassThru support
     process {
+        ## Do not allow duplicate computer entries
+        if ($Type -eq "Computer") {
+            if (Get-TabExpansion -Filter $Filter -Type $Type) {
+                ## TODO: Localize!
+                Write-Verbose "Found duplicate Computer entry for '$Filter'.  Ignoring."
+                return
+            }
+        }
+
         [Void]$dsTabExpansionDatabase.Tables['Custom'].Rows.Add($Filter, $Text, $Type)
 
         trap [System.Management.Automation.PipelineStoppedException] {
@@ -808,7 +878,7 @@ Set-Alias ate Add-TabExpansion
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Remove-TabExpansion {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param(
         [Parameter(Position = 0, Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
@@ -835,7 +905,7 @@ Set-Alias rte Remove-TabExpansion
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Invoke-TabExpansionEditor {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param()
 
     end {
@@ -866,14 +936,14 @@ Set-Alias itee Invoke-TabExpansionEditor
 
 # .ExternalHelp TabExpansionLib-Help.xml
 Function Register-TabExpansion {
-	[CmdletBinding()]
+    [CmdletBinding()]
     param(
-		[Parameter(Position = 0, Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
+        [Parameter(Position = 0, Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
         [ValidateNotNullOrEmpty()]
         [String]
         $Name
         ,
-		[Parameter(Position = 1, Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
+        [Parameter(Position = 1, Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
         [ValidateNotNull()]
         [ScriptBlock]
         $Handler
@@ -931,8 +1001,9 @@ Function Initialize-PowerTab {
     if ($ConfigurationPath -and ((Test-Path $ConfigurationPath) -or ($ConfigurationPath -eq "IsolatedStorage"))) {
         $Config = InternalImportTabExpansionConfig $ConfigurationPath
     } else {
-        ## TODO: Throw error or create new config?
-        #$Config = InternalNewTabExpansionConfig $ConfigurationPath
+        ## Configuration path does not exist
+        Write-Warning "Specified configuration path does not exist."  ## TODO: Localize
+        $Config = InternalNewTabExpansionConfig $ConfigurationPath
     }
 
     ## Load Version
@@ -957,7 +1028,8 @@ Function Initialize-PowerTab {
         ## Upgrade config and database
         UpgradeTabExpansionDatabase ([Ref]$Config) ([Ref]$Database) $Version
     } elseif ($Version -gt $CurVersion) {
-        ## TODO: config is from a later version
+        ## Config is from a newer version
+        throw "The configuration was created with a newer version of PowerTab and is not compatible."
     }
 
     ## Config and database are good
@@ -987,17 +1059,27 @@ Function UpgradeTabExpansionDatabase {
     in the database or config structure.  Or to add default values for new config settings.
     #>
 
+    $UpgradeOccurred = $false
+
     if ($Version -lt [System.Version]'0.99.3.0') {
         ## Upgrade versions from the first version of PowerTab
-        Write-Host "Upgrading from version $Version"
+        Write-Host "Upgrading from version $Version"  ## TODO:  Localize
         UpgradePowerTab99 $Config $Database
         $Version = '0.99.3.0'
+        $UpgradeOccurred = $true
     }
     if ($Version -lt [System.Version]'0.99.5.0') {
         ## Upgrade versions from the first version of PowerTab
-        Write-Host "Upgrading from version $Version"
+        Write-Host "Upgrading from version $Version"  ## TODO:  Localize
         UpgradePowerTab993 $Config $Database
         $Version = '0.99.5.0'
+        $UpgradeOccurred = $true
+    }
+
+    ## Export the newly upgraded config and database
+    if ($UpgradeOccurred) {
+        Export-TabExpansionConfig
+        Export-TabExpansionDatabase
     }
 }
 
@@ -1207,7 +1289,7 @@ Function InternalImportTabExpansionDataBase {
             [System.IO.FileMode]::Open, $UserIsoStorage)
         [Void]$Database.ReadXml($IsoFile)
     } elseif (Test-Path $LiteralPath) {
-        if (![System.IO.Path]::IsPathRooted($_)) {
+        if (![System.IO.Path]::IsPathRooted($LiteralPath)) {
             $LiteralPath = Resolve-Path $LiteralPath
         }
         [Void]$Database.ReadXml($LiteralPath)
@@ -1261,7 +1343,7 @@ Function InternalImportTabExpansionConfig {
             [System.IO.FileMode]::Open, $UserIsoStorage)
         [Void]$Config.ReadXml($IsoFile, 'InferSchema')
     } elseif (Test-Path $LiteralPath) {
-        if (![System.IO.Path]::IsPathRooted($_)) {
+        if (![System.IO.Path]::IsPathRooted($LiteralPath)) {
             $LiteralPath = Resolve-Path $LiteralPath
         }
         [Void]$Config.ReadXml($LiteralPath, 'InferSchema')
@@ -1299,7 +1381,7 @@ Function CreatePowerTabConfig {
             [Int]`$val = [Bool]`$args[0]
             `$dsTabExpansionConfig.Tables['Config'].Select(`"Name = 'Enabled'`")[0].Value = `$val
             if ([Bool]`$val) {
-                . `"`$PSScriptRoot\TabExpansion.ps1`"
+                . `"$PSScriptRoot\TabExpansion.ps1`"
             } else {
                 Set-Content Function:\TabExpansion -Value `$OldTabExpansion
             }") `

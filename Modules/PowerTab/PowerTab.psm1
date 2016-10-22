@@ -14,10 +14,18 @@ if (-not ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {$_.Manifest
 ## Cleanup
 #########################
 
-$OldTabExpansion = Get-Content Function:TabExpansion
+if (Test-Path Function:TabExpansion) {
+    $OldTabExpansion = Get-Content Function:TabExpansion
+} else {
+    ## This is a temporary compatibility change for PowerShell v3.
+    $OldTabExpansion = $null
+}
 $Module = $MyInvocation.MyCommand.ScriptBlock.Module 
 $Module.OnRemove = {
-    Set-Content Function:\TabExpansion -Value $OldTabExpansion
+    if ((Get-Command TabExpansion).Module.Name -eq "PowerTab") {
+        ## Only reset TabExpansion() if PowerTab's override is currently in use
+        $Function:TabExpansion = $OldTabExpansion
+    }
 }
 
 
@@ -39,6 +47,8 @@ $TabExpansionParameterNameRegistry = @{}
 
 $ConfigFileName = "PowerTabConfig.xml"
 
+$PSv3HasRun = if ($PSVersionTable.PSVersion -eq "3.0") {$false} else {$true}
+
 
 #########################
 ## Public properties
@@ -46,7 +56,15 @@ $ConfigFileName = "PowerTabConfig.xml"
 
 $PowerTabConfig = New-Object System.Management.Automation.PSObject
 
-$PowerTabError = New-Object System.Collections.ArrayList	
+New-Variable PowerTabLog -Value (
+    New-Object PSObject -Property @{
+        Error = New-Object System.Collections.ArrayList
+        Debug = New-Object System.Collections.ArrayList
+        DebugEnabled = $false
+        Trace = New-Object System.Collections.ArrayList
+        TraceEnabled = $false
+    }
+)
 
 
 #########################
@@ -55,12 +73,13 @@ $PowerTabError = New-Object System.Collections.ArrayList
 
 Import-Module (Join-Path $PSScriptRoot "Lerch.PowerShell.dll")
 . (Join-Path $PSScriptRoot "TabExpansionResources.ps1")
-Import-LocalizedData -BindingVariable "Resources" -FileName "Resources" -ErrorAction SilentlyContinue
+Import-LocalizedData -BindingVariable Resources -FileName Resources -ErrorAction SilentlyContinue
 . (Join-Path $PSScriptRoot "TabExpansionCore.ps1")
 . (Join-Path $PSScriptRoot "TabExpansionLib.ps1")
 . (Join-Path $PSScriptRoot "TabExpansionUtil.ps1")
 . (Join-Path $PSScriptRoot "TabExpansionHandlers.ps1")
 . (Join-Path $PSScriptRoot "ConsoleLib.ps1")
+. (Join-Path $PSScriptRoot "Readline.ps1")
 . (Join-Path $PSScriptRoot "Handlers\PSClientManager.ps1")
 . (Join-Path $PSScriptRoot "Handlers\Robocopy.ps1")
 . (Join-Path $PSScriptRoot "Handlers\Utilities.ps1")
@@ -131,7 +150,7 @@ if ($ConfigurationPathParam) {
         $LocationChoices = [System.Management.Automation.Host.ChoiceDescription[]]($ProfileDir,$InstallDir,$AppDataDir,$IsoStorageDir,$OtherDir)
         $Answer = $Host.UI.PromptForChoice($Resources.setup_wizard_config_location_caption, $Resources.setup_wizard_config_location_message, $LocationChoices, 0)
         $SetupConfigurationPath = switch ($Answer) {
-            0 {Split-Path $Profile}
+            0 {$ExecutionContext.SessionState.Path.ParseParent($Profile, $null)}
             1 {$PSScriptRoot}
             2 {Join-Path ([System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::ApplicationData)) "PowerTab"}
             3 {"IsolatedStorage"}
@@ -156,7 +175,7 @@ if ($ConfigurationPathParam) {
         CreatePowerTabConfig
 
         ## Profile text
-        ## TODO: Ask to update profile
+        ## TODO: Localize this text?
         $ProfileText = @"
 
 <############### Start of PowerTab Initialization Code ########################
@@ -168,9 +187,20 @@ Import-Module "PowerTab" -ArgumentList "$(Join-Path $SetupConfigurationPath $Con
 ################ End of PowerTab Initialization Code ##########################
 
 "@
-        Write-Host ""
-        Write-Host $Resources.setup_wizard_add_to_profile
-        Write-Host $ProfileText
+        if (-not (Select-String "Start of PowerTab Initialization Code" $PROFILE)) {
+            $Answer = $Host.UI.PromptForChoice($Resources.setup_wizard_update_profile_caption, $Resources.setup_wizard_update_profile_message, $YesNoChoices, 1)
+
+            if ($Answer) {
+                $Text = $ProfileText + "`r`n" + (Get-Content $PROFILE -Delimiter `0 -ErrorAction SilentlyContinue)
+                $Encoding = Get-FileEncoding $PROFILE
+                Set-Content $PROFILE $Text -Encoding $Encoding
+            } else {
+                Write-Host ""
+                Write-Host $Resources.setup_wizard_add_to_profile
+                Write-Host $ProfileText
+            }
+        }
+        ## TODO: Check if import of PowerTab code needs to be updated?
 
         ## Create new database or load existing database
         if ($SetupConfigurationPath -eq "IsolatedStorage") {
@@ -214,6 +244,7 @@ if ($PowerTabConfig.Enabled) {
 
 if ($PowerTabConfig.ShowBanner) {
     $CurVersion = (Parse-Manifest).ModuleVersion
+    ## TODO:  Localize?
     Write-Host -ForegroundColor 'Yellow' "PowerTab version ${CurVersion} PowerShell TabExpansion Library"
     Write-Host -ForegroundColor 'Yellow' "Host: $($Host.Name)"
     Write-Host -ForegroundColor 'Yellow' "PowerTab Enabled: $($PowerTabConfig.Enabled)"
@@ -223,22 +254,4 @@ if ($PowerTabConfig.ShowBanner) {
 ## Exported functions, variables, etc.
 $ExcludedFuctions = @("Initialize-TabExpansion")
 $Functions = Get-Command "*-TabExpansion*","New-TabItem" | Where-Object {$ExcludedFuctions -notcontains $_.Name}
-#$Functions = Get-Command "*-*" | Where-Object {$ExcludedFuctions -notcontains $_.Name}
-Export-ModuleMember -Function $Functions -Variable PowerTabConfig, PowerTabError -Alias *
-
-<#
-TODOs
-- Support variables in path:  $test = "C:"; $test\<TAB>
-~ Expand items in a list:  Get-Command -CommandType Cm<TAB>,Fun<TAB>
-- Assignment to strongly type variables:  $ErrorActionPreference = <TAB>
-- Alias and Variable replace:  ls^A  or  $test^A
-
-Just ideas:
-- DateTime formats:  ^D<TAB>  or  2008/01/20^D<TAB>
-- Paste clipboard:  ^V<TAB>
-- Cut line:  Get-Foo -Bar something^X<TAB>  -->  
-- Cut word:  Get-Foo -Bar something^Z<TAB>  -->  Get-Foo -Bar
-
-- handle group start tokens ('{', '(', etc.)
-~ Not detecting possitional parameters bound from pipeline
-#>
+Export-ModuleMember -Function $Functions -Variable PowerTabConfig, PowerTabLog -Alias *
